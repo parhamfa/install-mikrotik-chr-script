@@ -1,0 +1,10 @@
+[
+  {
+    "ifindex": 2,
+    "ifname": "ens3",
+    "flags": ["BROADCAST", "MULTICAST", "UP", "LOWER_UP"],
+    "mtu": 1500,
+    "address": "d2:cb:48:5c:3e:71",
+    "link_type": "ether"
+  }
+]

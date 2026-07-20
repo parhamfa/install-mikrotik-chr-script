@@ -1,0 +1,16 @@
+[
+  {
+    "dst": "default",
+    "gateway": "45.135.242.1",
+    "dev": "ens3",
+    "protocol": "static",
+    "metric": 100
+  },
+  {
+    "dst": "45.135.242.0/24",
+    "dev": "ens3",
+    "protocol": "kernel",
+    "scope": "link",
+    "prefsrc": "45.135.242.144"
+  }
+]

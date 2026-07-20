@@ -1,60 +1,48 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-# Detect CPU Architecture (x86_64 or arm64)
-ARCH=$(uname -m)
-VERSION="7.23.2"
+readonly repository="${CHR_INSTALL_REPOSITORY:-parhamfa/install-mikrotik-chr-script}"
+readonly asset="chr-install-linux-amd64"
+readonly release_base="https://github.com/${repository}/releases/latest/download"
 
-if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-    URL="https://download.mikrotik.com/routeros/${VERSION}/chr-${VERSION}-arm64.img.zip"
+fail() {
+  printf 'chr-install bootstrap: %s\n' "$*" >&2
+  exit 1
+}
+
+[[ "$(uname -s)" == "Linux" ]] || fail "Linux is required"
+case "$(uname -m)" in
+  x86_64 | amd64) ;;
+  *) fail "AMD64 is required" ;;
+esac
+[[ "${EUID}" -eq 0 ]] || fail "run through sudo or as root"
+
+for command in curl sha256sum mktemp; do
+  command -v "${command}" >/dev/null 2>&1 || fail "required command is missing: ${command}"
+done
+
+work_dir="$(mktemp -d -t chr-install.XXXXXXXX)"
+cleanup() {
+  if [[ -n "${work_dir:-}" && -d "${work_dir}" ]]; then
+    rm -f "${work_dir}/${asset}" "${work_dir}/${asset}.sha256"
+    rmdir "${work_dir}" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
+curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 4 --retry-all-errors --retry-delay 2 \
+  "${release_base}/${asset}" --output "${work_dir}/${asset}"
+curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 4 --retry-all-errors --retry-delay 2 \
+  "${release_base}/${asset}.sha256" --output "${work_dir}/${asset}.sha256"
+
+(
+  cd "${work_dir}"
+  sha256sum --check --status "${asset}.sha256"
+) || fail "release checksum verification failed"
+
+chmod 0700 "${work_dir}/${asset}"
+if [[ -t 0 && -r /dev/tty && -w /dev/tty ]]; then
+  "${work_dir}/${asset}" "$@" </dev/tty >/dev/tty 2>/dev/tty
 else
-    URL="https://download.mikrotik.com/routeros/${VERSION}/chr-${VERSION}.img.zip"
+  "${work_dir}/${asset}" "$@"
 fi
-
-echo "Detected Architecture: $ARCH"
-echo "Downloading: $URL"
-
-# Downloading the MikroTik image
-wget "$URL" -O chr.img.zip
-
-# Unzipping the image
-gunzip -c chr.img.zip > chr.img
-sleep 5
-
-# Mounting the image
-mount -o loop,offset=33571840 chr.img /mnt
-sleep 5
-
-# Determining the primary disk device
-DISK=$(lsblk | grep disk | cut -d ' ' -f 1 | head -n 1)
-sleep 5
-
-# Creating the autorun script with MikroTik commands
-cat > /mnt/rw/autorun.scr <<EOF
-:do {:delay 60s} on-error {}
-:do {/ip dhcp-client/add add-default-route=yes use-peer-dns=yes use-peer-ntp=yes interface=ether1 dhcp-options=hostname,clientid} on-error {}
-:do {/ip dhcp-client/add add-default-route=yes use-peer-dns=yes use-peer-ntp=yes interface=ether2 dhcp-options=hostname,clientid} on-error {}
-:do {/ip dhcp-client/add add-default-route=yes use-peer-dns=yes use-peer-ntp=yes interface=ether3 dhcp-options=hostname,clientid} on-error {}
-:do {/ip dhcp-client/add add-default-route=yes use-peer-dns=yes use-peer-ntp=yes interface=ether4 dhcp-options=hostname,clientid} on-error {}
-:do {/ip dhcp-client/add add-default-route=yes use-peer-dns=yes use-peer-ntp=yes interface=ether5 dhcp-options=hostname,clientid} on-error {}
-EOF
-sleep 5
-
-# Unmounting the image
-umount /mnt
-sleep 5
-
-# Triggering kernel to dump its caches
-echo u > /proc/sysrq-trigger
-sleep 5
-
-# Writing the image to the primary disk device
-dd if=chr.img of=/dev/$DISK bs=4M oflag=sync
-sleep 5
-
-# Syncing file system
-echo s > /proc/sysrq-trigger
-sleep 5
-echo "Rebooting..."
-
-# Rebooting
-echo b > /proc/sysrq-trigger

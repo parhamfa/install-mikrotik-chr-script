@@ -1,0 +1,24 @@
+[
+  {
+    "ifindex": 2,
+    "ifname": "ens3",
+    "link_type": "ether",
+    "address": "d2:cb:48:5c:3e:71",
+    "addr_info": [
+      {
+        "family": "inet",
+        "local": "45.135.242.144",
+        "prefixlen": 24,
+        "scope": "global",
+        "protocol": "static"
+      },
+      {
+        "family": "inet6",
+        "local": "fe80::d0cb:48ff:fe5c:3e71",
+        "prefixlen": 64,
+        "scope": "link",
+        "protocol": "kernel_ll"
+      }
+    ]
+  }
+]

@@ -1,0 +1,13 @@
+network:
+  version: 2
+  ethernets:
+    ens3:
+      match:
+        macaddress: d2:cb:48:5c:3e:71
+      addresses:
+        - 45.135.242.144/24
+      routes:
+        - to: default
+          via: 45.135.242.1
+      nameservers:
+        addresses: [8.8.8.8, 217.218.127.127]
