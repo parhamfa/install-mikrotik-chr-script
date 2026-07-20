@@ -45,10 +45,13 @@ func buildInitramfs(ctx context.Context, runner command.Runner, kernelVersion, o
 	if err := copyTree(configSource, configDir); err != nil {
 		return fmt.Errorf("copy initramfs configuration: %w", err)
 	}
-	for _, path := range []string{filepath.Join(configDir, "hooks"), filepath.Join(configDir, "scripts", "local-premount"), filepath.Join(configDir, "chr-install-payload")} {
+	for _, path := range []string{filepath.Join(configDir, "hooks"), filepath.Join(configDir, "scripts", "local-premount"), filepath.Join(configDir, "conf.d"), filepath.Join(configDir, "chr-install-payload")} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			return err
 		}
+	}
+	if err := writeExclusive(filepath.Join(configDir, "conf.d", "zz-chr-install-modules"), []byte("MODULES=most\n"), 0o600); err != nil {
+		return err
 	}
 
 	manifest.ImagePath = "/chr-install/chr.img"
@@ -76,7 +79,7 @@ chmod 0600 "$DESTDIR/chr-install/chr.img" "$DESTDIR/chr-install/manifest.json"
 		return err
 	}
 
-	if _, err := runner.Run(ctx, "mkinitramfs", "-m", "most", "-d", configDir, "-o", outputPath, kernelVersion); err != nil {
+	if _, err := runner.Run(ctx, "mkinitramfs", "-d", configDir, "-o", outputPath, kernelVersion); err != nil {
 		_ = os.Remove(outputPath)
 		return err
 	}

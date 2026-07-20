@@ -65,12 +65,12 @@ func TestNetworkNamespacePlans(t *testing.T) {
 		fixture := newNamespaceFixture(t, 3, 1500, "nameserver 2001:4860:4860::8844\n", config)
 		fixture.ip("address", "add", "192.0.2.20/24", "dev", "uplink")
 		fixture.ip("route", "add", "default", "via", "192.0.2.1", "dev", "uplink")
-		fixture.ip("-6", "address", "add", "2001:db8:1::20/64", "dev", "uplink", "proto", "kernel_ra", "nodad")
+		fixture.startRouterAdvertisement()
 		fixture.ip("-6", "address", "add", "2001:db8:2::20/64", "dev", "uplink", "nodad")
-		fixture.ip("-6", "route", "add", "default", "via", "fe80::1", "dev", "uplink")
 		plan, issues := Detect(context.Background(), fixture.runner(), namespaceProber{}, fixture.root)
 		assertNoBlockers(t, issues)
-		if plan.IPv4.Mode != "static" || !plan.IPv6.SLAAC || !plan.IPv6.DHCP || strings.Join(plan.IPv6.Addresses, ",") != "2001:db8:2::20/64" || plan.IPv6.Gateway != "fe80::1" {
+		gateway := net.ParseIP(plan.IPv6.Gateway)
+		if plan.IPv4.Mode != "static" || !plan.IPv6.SLAAC || !plan.IPv6.DHCP || strings.Join(plan.IPv6.Addresses, ",") != "2001:db8:2::20/64" || gateway == nil || !gateway.IsLinkLocalUnicast() {
 			t.Fatalf("unexpected dual-stack plan: %#v", plan)
 		}
 	})
@@ -148,6 +148,40 @@ func (fixture *namespaceFixture) startDHCPServer() {
 	if process.ProcessState != nil {
 		fixture.t.Fatalf("dnsmasq exited during startup: %s", logs.String())
 	}
+}
+
+func (fixture *namespaceFixture) startRouterAdvertisement() {
+	fixture.t.Helper()
+	if _, err := exec.LookPath("dnsmasq"); err != nil {
+		fixture.t.Fatal("dnsmasq is required for the SLAAC namespace scenario")
+	}
+	runIP(fixture.t, "-6", "address", "add", "2001:db8:1::1/64", "dev", fixture.hostIf)
+	output, err := exec.Command("ip", "netns", "exec", fixture.name, "sysctl", "-qw", "net.ipv6.conf.uplink.accept_ra=2").CombinedOutput()
+	if err != nil {
+		fixture.t.Fatalf("enable router advertisements: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+	var logs bytes.Buffer
+	process := exec.Command("dnsmasq",
+		"--no-daemon", "--conf-file=/dev/null", "--port=0", "--bind-interfaces", "--interface="+fixture.hostIf,
+		"--enable-ra", "--dhcp-range=::,constructor:"+fixture.hostIf+",ra-stateless,64,10m", "--ra-param="+fixture.hostIf+",3,30",
+	)
+	process.Stdout, process.Stderr = &logs, &logs
+	if err := process.Start(); err != nil {
+		fixture.t.Fatal(err)
+	}
+	fixture.t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		addresses, addressErr := exec.Command("ip", "-n", fixture.name, "-j", "-6", "address", "show", "dev", fixture.uplink, "scope", "global").CombinedOutput()
+		if addressErr == nil && bytes.Contains(addresses, []byte(`"dynamic":true`)) {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	fixture.t.Fatalf("SLAAC address did not arrive: %s", logs.String())
 }
 
 func runIP(t *testing.T, args ...string) {
