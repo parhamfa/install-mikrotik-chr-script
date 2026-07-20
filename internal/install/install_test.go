@@ -83,18 +83,22 @@ type initramfsFixtureRunner struct {
 }
 
 func (runner *initramfsFixtureRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
-	if name != "mkinitramfs" || len(args) != 7 || args[0] != "-m" || args[1] != "most" || args[2] != "-d" || args[4] != "-o" || args[6] != "6.12-test" {
+	if name != "mkinitramfs" || len(args) != 5 || args[0] != "-d" || args[2] != "-o" || args[4] != "6.12-test" {
 		return nil, fmt.Errorf("unexpected command: %s %v", name, args)
 	}
-	configDir, output := args[3], args[5]
+	configDir, output := args[1], args[3]
 	for _, path := range []string{
 		filepath.Join(configDir, "hooks", "zz-chr-install-writer"),
 		filepath.Join(configDir, "scripts", "local-premount", "zz-chr-install-writer"),
+		filepath.Join(configDir, "conf.d", "zz-chr-install-modules"),
 		filepath.Join(configDir, "chr-install-payload", "manifest.json"),
 	} {
 		data, err := os.ReadFile(path)
 		if err != nil || len(data) == 0 {
 			return nil, fmt.Errorf("missing generated initramfs input %s: %w", path, err)
+		}
+		if filepath.Base(path) == "zz-chr-install-modules" && string(data) != "MODULES=most\n" {
+			return nil, fmt.Errorf("unexpected modules override %q", data)
 		}
 	}
 	runner.inspected = true

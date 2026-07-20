@@ -257,7 +257,7 @@ func verifyRouterOSConsole(console *serialConsole, plan model.NetworkPlan) error
 	if err := console.send("\r"); err != nil {
 		return err
 	}
-	marker, err := completeTerminalHandshake(console, 15*time.Second)
+	marker, err := completeTerminalHandshake(console, 30*time.Second)
 	if err != nil {
 		return err
 	}
@@ -313,8 +313,14 @@ func completeTerminalHandshake(console *serialConsole, timeout time.Duration) (s
 	deadline := time.Now().Add(timeout)
 	deviceReplies := 0
 	cursorReplies := 0
+	lastOutputLength := len(console.Snapshot())
+	lastActivity := time.Now()
 	for time.Now().Before(deadline) {
 		output := console.Snapshot()
+		if len(output) != lastOutputLength {
+			lastOutputLength = len(output)
+			lastActivity = time.Now()
+		}
 		for deviceReplies < strings.Count(output, "\x1bZ") {
 			if err := console.send("\x1b[?1;2c"); err != nil {
 				return "", err
@@ -331,6 +337,15 @@ func completeTerminalHandshake(console *serialConsole, timeout time.Duration) (s
 			if strings.Contains(output, marker) {
 				return marker, nil
 			}
+		}
+		// A blank password can be lost while a heavily loaded TCG guest is
+		// switching the serial console into terminal-negotiation mode. Retry
+		// only when the guest has emitted nothing for a few seconds.
+		if time.Since(lastActivity) >= 3*time.Second {
+			if err := console.send("\r"); err != nil {
+				return "", err
+			}
+			lastActivity = time.Now()
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
