@@ -1,0 +1,96 @@
+name: Full CHR QEMU test
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  network-namespaces:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+      - run: sudo apt-get update && sudo apt-get install -y dnsmasq-base
+      - name: Exercise namespace network plans
+        run: sudo env "PATH=$PATH" CHR_NETNS_INTEGRATION=1 go test -tags=integration -run TestNetworkNamespacePlans ./internal/network -v -timeout 5m
+
+  writer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        disk: [virtio, scsi, nvme]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 linux-image-generic
+      - name: Build writer binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -trimpath -o /tmp/chr-install-linux-amd64 ./cmd/chr-install
+      - name: Boot and verify the staged pre-root writer
+        run: |
+          KERNEL="$(find /boot -maxdepth 1 -name 'vmlinuz-*' -type f | sort -V | tail -1)"
+          INITRD="${KERNEL/vmlinuz-/initrd.img-}"
+          test -f "$KERNEL" && test -f "$INITRD"
+          sudo env \
+            "PATH=$PATH" \
+            CHR_WRITER_INTEGRATION=1 \
+            CHR_TEST_KERNEL="$KERNEL" \
+            CHR_TEST_KERNEL_VERSION="${KERNEL##*/vmlinuz-}" \
+            CHR_TEST_BINARY=/tmp/chr-install-linux-amd64 \
+            CHR_WRITER_DISK=${{ matrix.disk }} \
+            go test -tags=integration -run 'Test(StagedWriterQEMU|DirectWriterLoopDevice)' ./internal/integration -v -timeout 8m
+
+  qemu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - firmware: bios
+            disk: virtio
+            nic: virtio
+          - firmware: bios
+            disk: scsi
+            nic: e1000
+          - firmware: bios
+            disk: nvme
+            nic: vmxnet3
+          - firmware: uefi
+            disk: virtio
+            nic: virtio
+            expect_uefi_block: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+      - name: Install QEMU and filesystem tools
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 ovmf
+      - name: Boot official CHR image
+        env:
+          CHR_QEMU_INTEGRATION: "1"
+          CHR_QEMU_FIRMWARE: ${{ matrix.firmware }}
+          CHR_QEMU_DISK: ${{ matrix.disk }}
+          CHR_QEMU_NIC: ${{ matrix.nic }}
+          CHR_QEMU_EXPECT_UEFI_BLOCK: ${{ matrix.expect_uefi_block }}
+        run: sudo --preserve-env=CHR_QEMU_INTEGRATION,CHR_QEMU_FIRMWARE,CHR_QEMU_DISK,CHR_QEMU_NIC,CHR_QEMU_EXPECT_UEFI_BLOCK env "PATH=$PATH" go test -tags=integration -run TestQEMUBoot ./internal/integration -v -timeout 12m

@@ -1,0 +1,4 @@
+[
+  {"priority": 0, "table": "local"},
+  {"priority": 32766, "table": "main"}
+]

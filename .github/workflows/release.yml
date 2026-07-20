@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: bash -n installer.sh
+
+  full-qemu:
+    uses: ./.github/workflows/qemu.yml
+
+  release:
+    needs: [validate, full-qemu]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+      - name: Build release asset
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          VERSION="${GITHUB_REF_NAME#v}"
+          BUILD_DATE="$(git show -s --format=%cI HEAD)"
+          go build -trimpath \
+            -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${GITHUB_SHA} -X main.date=${BUILD_DATE}" \
+            -o dist/chr-install-linux-amd64 ./cmd/chr-install
+          cd dist
+          sha256sum chr-install-linux-amd64 > chr-install-linux-amd64.sha256
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/chr-install-linux-amd64 \
+            dist/chr-install-linux-amd64.sha256 \
+            --verify-tag --generate-notes --title "chr-install ${GITHUB_REF_NAME}"
+
+  smoke:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Exercise the legacy raw URL and checksum bootstrap
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            https://raw.githubusercontent.com/parhamfa/install-mikrotik-chr-script/main/installer.sh \
+            --output /tmp/chr-install-bootstrap.sh
+          OUTPUT="$(sudo bash /tmp/chr-install-bootstrap.sh --version)"
+          printf '%s\n' "$OUTPUT"
+          printf '%s\n' "$OUTPUT" | grep -F "chr-install ${GITHUB_REF_NAME#v} (commit ${GITHUB_SHA}, built "
