@@ -124,7 +124,7 @@ func TestSupportedNetworkDrivers(t *testing.T) {
 	}
 }
 
-func TestValidateOffLinkStaticPlan(t *testing.T) {
+func TestRouterOSOffLinkStaticPlan(t *testing.T) {
 	plan := model.NetworkPlan{
 		InterfaceName: "ens3",
 		MAC:           "02:00:00:00:00:01",
@@ -133,6 +133,11 @@ func TestValidateOffLinkStaticPlan(t *testing.T) {
 			Mode:          "static",
 			Addresses:     []string{"192.0.2.10/32"},
 			Gateway:       "192.0.2.1",
+			GatewayOnLink: true,
+		},
+		IPv6: model.IPv6Plan{
+			Addresses:     []string{"2001:db8:1::10/128"},
+			Gateway:       "2001:db8:2::1",
 			GatewayOnLink: true,
 		},
 	}
@@ -150,11 +155,38 @@ func TestValidateOffLinkStaticPlan(t *testing.T) {
 		"accept-router-advertisements=no",
 		"address=192.0.2.10/32",
 		"dst-address=192.0.2.1/32 gateway=$uplinkName scope=10",
-		"dst-address=0.0.0.0/0 gateway=192.0.2.1",
+		"dst-address=0.0.0.0/0 gateway=192.0.2.1 target-scope=11",
+		"address=2001:db8:1::10/128",
+		"dst-address=2001:db8:2::1/128 gateway=$uplinkName scope=10",
+		"dst-address=::/0 gateway=2001:db8:2::1 target-scope=11",
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("script does not contain %q:\n%s", expected, script)
 		}
+	}
+}
+
+func TestRouterOSConnectedGatewaysKeepDefaultTargetScope(t *testing.T) {
+	plan := model.NetworkPlan{
+		InterfaceName: "ens3",
+		MAC:           "02:00:00:00:00:01",
+		MTU:           1500,
+		IPv4: model.IPv4Plan{
+			Mode:      "static",
+			Addresses: []string{"192.0.2.10/24"},
+			Gateway:   "192.0.2.1",
+		},
+		IPv6: model.IPv6Plan{
+			Addresses: []string{"2001:db8::10/64"},
+			Gateway:   "2001:db8::1",
+		},
+	}
+	script, err := RouterOSScript(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(script, "target-scope=11") {
+		t.Fatalf("directly connected gateway unexpectedly uses recursive target scope:\n%s", script)
 	}
 }
 
