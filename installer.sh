@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly repository="${CHR_INSTALL_REPOSITORY:-parhamfa/install-mikrotik-chr-script}"
+readonly repository="${CHR_INSTALL_REPOSITORY:-parhamfa/chr-install}"
 readonly asset="chr-install-linux-amd64"
 readonly release_base="https://github.com/${repository}/releases/latest/download"
 

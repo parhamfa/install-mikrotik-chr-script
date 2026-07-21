@@ -2,6 +2,8 @@
 
 Changes are welcome, but the installer has a deliberately narrow contract: safely replace a supported Linux installation with CHR and preserve reviewed Layer-3 connectivity. RouterOS passwords, users, firewall policy, service restrictions, licensing, and general configuration management belong in separate tools.
 
+Use the bug or feature issue form before proposing a substantial behavior change. Security vulnerabilities belong in a private report as described in [SECURITY.md](SECURITY.md), not a public issue. Redact public IP addresses, MAC addresses, disk serials, WWNs, provider identifiers, and credentials from logs unless they are intentionally public test fixtures.
+
 Before opening a pull request:
 
 ```bash

@@ -61,11 +61,19 @@ jobs:
   smoke:
     needs: release
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - source: canonical raw URL
+            url: https://raw.githubusercontent.com/parhamfa/chr-install/main/installer.sh
+          - source: legacy redirect
+            url: https://raw.githubusercontent.com/parhamfa/install-mikrotik-chr-script/main/installer.sh
     steps:
-      - name: Exercise the legacy raw URL and checksum bootstrap
+      - name: Exercise ${{ matrix.source }} and checksum bootstrap
         run: |
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-            https://raw.githubusercontent.com/parhamfa/install-mikrotik-chr-script/main/installer.sh \
+            "${{ matrix.url }}" \
             --output /tmp/chr-install-bootstrap.sh
           OUTPUT="$(sudo bash /tmp/chr-install-bootstrap.sh --version)"
           printf '%s\n' "$OUTPUT"
