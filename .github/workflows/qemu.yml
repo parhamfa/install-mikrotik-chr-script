@@ -37,7 +37,7 @@ jobs:
           go-version: "1.24.x"
           cache: true
       - name: Install QEMU
-        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 linux-image-generic
+        run: sudo env DEBIAN_FRONTEND=noninteractive apt-get update && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y qemu-system-x86 linux-image-generic grub-pc-bin grub2-common e2fsprogs fdisk kexec-tools
       - name: Build writer binary
         env:
           CGO_ENABLED: "0"
@@ -56,7 +56,7 @@ jobs:
             CHR_TEST_KERNEL_VERSION="${KERNEL##*/vmlinuz-}" \
             CHR_TEST_BINARY=/tmp/chr-install-linux-amd64 \
             CHR_WRITER_DISK=${{ matrix.disk }} \
-            go test -tags=integration -run 'Test(StagedWriterQEMU|DirectWriterLoopDevice)' ./internal/integration -v -timeout 8m
+            go test -tags=integration -run 'Test(StagedWriterQEMU|StagedWriterGRUBQEMU|StagedWriterKexecQEMU|DirectWriterLoopDevice)' ./internal/integration -v -timeout 12m
 
   qemu:
     runs-on: ubuntu-latest

@@ -47,7 +47,7 @@ func TestDetectSingleRootDisk(t *testing.T) {
 		}
 	}
 	runner := fakeRunner{
-		paths: map[string]bool{"kexec": true, "mkinitramfs": true},
+		paths: map[string]bool{"kexec": true, "mkinitramfs": true, "lsinitramfs": true},
 		responses: map[string][]byte{
 			"findmnt -J -n -o SOURCE,FSTYPE /": []byte(`{"filesystems":[{"source":"/dev/sda1","fstype":"ext4"}]}`),
 			"readlink -f /dev/sda1":            []byte("/dev/sda1\n"),
@@ -118,5 +118,56 @@ func TestRescueRefusesMultipleDisks(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected disk ambiguity blocker, got %#v", issues)
+	}
+}
+
+func TestRootInstallRefusesMultipleDisksWithoutStableTargetIdentity(t *testing.T) {
+	root := t.TempDir()
+	for _, path := range []string{"boot/vmlinuz-test", "boot/initrd.img-test", "sys/class/block/sda/device/driver"} {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		value := "fixture"
+		if strings.HasSuffix(path, "/driver") {
+			value = "sd\n"
+		}
+		if err := os.WriteFile(full, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := fakeRunner{
+		paths: map[string]bool{"kexec": true, "mkinitramfs": true, "lsinitramfs": true},
+		responses: map[string][]byte{
+			"findmnt -J -n -o SOURCE,FSTYPE /": []byte(`{"filesystems":[{"source":"/dev/sda1","fstype":"ext4"}]}`),
+			"readlink -f /dev/sda1":            []byte("/dev/sda1\n"),
+			"uname -r":                         []byte("test\n"),
+			"lsblk -J -b -o NAME,KNAME,PATH,TYPE,PKNAME,SIZE,MODEL,SERIAL,WWN,TRAN,MAJ:MIN,RO,RM,MOUNTPOINTS": []byte(`{"blockdevices":[{"name":"sda","kname":"sda","path":"/dev/sda","type":"disk","size":10737418240,"model":"DISK A","tran":"scsi","maj:min":"8:0","ro":false,"rm":false,"mountpoints":[null],"children":[{"name":"sda1","kname":"sda1","path":"/dev/sda1","type":"part","pkname":"sda","size":10736369664,"maj:min":"8:1","mountpoints":["/"]}]},{"name":"sdb","kname":"sdb","path":"/dev/sdb","type":"disk","size":10737418240,"model":"DISK B","tran":"scsi","maj:min":"8:16","ro":false,"rm":false,"mountpoints":[null]}]}`),
+		},
+	}
+	_, issues := Detect(context.Background(), runner, root)
+	for _, issue := range issues {
+		if issue.Code == "disk-identity" && issue.Severity == model.SeverityBlocker {
+			return
+		}
+	}
+	t.Fatalf("expected stable disk identity blocker, got %#v", issues)
+}
+
+func TestInspectGRUBEnvironmentRequiresPlainExtFilesystem(t *testing.T) {
+	root := t.TempDir()
+	environmentPath := filepath.Join(root, "boot", "grub", "grubenv")
+	runner := fakeRunner{responses: map[string][]byte{
+		"grub-probe --target=fs " + environmentPath:          []byte("ext2\n"),
+		"grub-probe --target=abstraction " + environmentPath: []byte("lvm\n"),
+	}}
+	supported, reason := inspectGRUBEnvironment(context.Background(), runner, root)
+	if supported || !strings.Contains(reason, "lvm") {
+		t.Fatalf("expected LVM abstraction to be rejected, got supported=%t reason=%q", supported, reason)
+	}
+	runner.responses["grub-probe --target=abstraction "+environmentPath] = []byte("\n")
+	supported, reason = inspectGRUBEnvironment(context.Background(), runner, root)
+	if !supported || reason != "" {
+		t.Fatalf("expected plain ext filesystem to pass, got supported=%t reason=%q", supported, reason)
 	}
 }

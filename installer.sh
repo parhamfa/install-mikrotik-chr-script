@@ -21,7 +21,27 @@ for command in curl sha256sum mktemp; do
   command -v "${command}" >/dev/null 2>&1 || fail "required command is missing: ${command}"
 done
 
-work_dir="$(mktemp -d -t chr-install.XXXXXXXX)"
+work_dir=""
+select_work_dir() {
+  local candidate candidate_dir probe
+  for candidate in "${CHR_INSTALL_TMPDIR:-}" "${TMPDIR:-}" /var/tmp /tmp; do
+    [[ -n "${candidate}" && -d "${candidate}" && -w "${candidate}" ]] || continue
+    candidate_dir="$(mktemp -d -p "${candidate}" chr-install.XXXXXXXX 2>/dev/null)" || continue
+    probe="${candidate_dir}/.exec-test"
+    printf '#!/bin/sh\nexit 0\n' >"${probe}"
+    chmod 0700 "${probe}"
+    if "${probe}" >/dev/null 2>&1; then
+      rm -f "${probe}"
+      work_dir="${candidate_dir}"
+      return 0
+    fi
+    rm -f "${probe}"
+    rmdir "${candidate_dir}" 2>/dev/null || true
+  done
+  fail "no writable executable temporary directory is available; set CHR_INSTALL_TMPDIR to one"
+}
+select_work_dir
+readonly work_dir
 cleanup() {
   if [[ -n "${work_dir:-}" && -d "${work_dir}" ]]; then
     rm -f "${work_dir}/${asset}" "${work_dir}/${asset}.sha256"
@@ -30,9 +50,15 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 4 --retry-all-errors --retry-delay 2 \
+readonly -a curl_options=(
+  --proto '=https' --tlsv1.2 --fail --silent --show-error --location
+  --retry 4 --retry-all-errors --retry-delay 2
+  --connect-timeout 15 --max-time 900
+)
+
+curl "${curl_options[@]}" \
   "${release_base}/${asset}" --output "${work_dir}/${asset}"
-curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 4 --retry-all-errors --retry-delay 2 \
+curl "${curl_options[@]}" \
   "${release_base}/${asset}.sha256" --output "${work_dir}/${asset}.sha256"
 
 (

@@ -27,6 +27,9 @@ const (
 	maxMetadataBytes   = 64 * 1024
 	maxArchiveBytes    = 1024 * 1024 * 1024
 	maxImageBytes      = 4 * 1024 * 1024 * 1024
+	metadataAttempts   = 4
+	metadataTimeout    = 30 * time.Second
+	metadataRetryDelay = 250 * time.Millisecond
 )
 
 var versionPattern = regexp.MustCompile(`^7\.[0-9]+(?:\.[0-9]+)?$`)
@@ -164,29 +167,59 @@ func (client *Client) fetchChecksum(ctx context.Context, url string) (string, er
 }
 
 func (client *Client) getSmall(ctx context.Context, url string) ([]byte, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	var lastErr error
+	for attempt := 1; attempt <= metadataAttempts; attempt++ {
+		body, retryable, err := client.getSmallOnce(ctx, url)
+		if err == nil {
+			return body, nil
+		}
+		lastErr = err
+		if !retryable {
+			return nil, err
+		}
+		if attempt == metadataAttempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(attempt) * metadataRetryDelay):
+		}
+	}
+	return nil, fmt.Errorf("metadata request failed after %d attempts: %w", metadataAttempts, lastErr)
+}
+
+func (client *Client) getSmallOnce(ctx context.Context, url string) ([]byte, bool, error) {
+	attemptContext, cancel := context.WithTimeout(ctx, metadataTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(attemptContext, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	response, err := client.HTTP.Do(request)
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, false, ctx.Err()
+		}
+		return nil, true, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s returned %s", url, response.Status)
+		retryable := response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxMetadataBytes))
+		return nil, retryable, fmt.Errorf("GET %s returned %s", url, response.Status)
 	}
 	if response.ContentLength > maxMetadataBytes {
-		return nil, fmt.Errorf("GET %s exceeded the %d byte metadata limit", url, maxMetadataBytes)
+		return nil, false, fmt.Errorf("GET %s exceeded the %d byte metadata limit", url, maxMetadataBytes)
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxMetadataBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
 	if len(body) > maxMetadataBytes {
-		return nil, fmt.Errorf("GET %s exceeded the %d byte metadata limit", url, maxMetadataBytes)
+		return nil, false, fmt.Errorf("GET %s exceeded the %d byte metadata limit", url, maxMetadataBytes)
 	}
-	return body, nil
+	return body, false, nil
 }
 
 func (client *Client) download(ctx context.Context, url, destination string, maximum int64) error {

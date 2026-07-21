@@ -19,6 +19,7 @@ It is intentionally not a RouterOS hardening tool. It does not create passwords 
 - Ubuntu 22.04, 24.04, and 26.04 LTS
 - Firmware modes validated for the exact RouterOS release (7.21.5: legacy BIOS)
 - One unambiguous local boot disk
+- A serial or WWN for the target when additional disks are visible during a root-backed install
 - One Ethernet uplink with a single routing policy
 - IPv4 DHCP or static addressing
 - IPv6 SLAAC, DHCPv6, static addressing, or combinations of those modes
@@ -63,11 +64,26 @@ There is no unattended mode and no reboot countdown.
 - The target disk is derived from the filesystem backing `/`, then its ancestry and fingerprint are rechecked after review.
 - The writer records the disk serial/WWN, size, kernel name, and major/minor identity, then checks them again immediately before writing.
 - A normal running root disk is never overwritten from normal userspace; `mkinitramfs` rebuilds a RAM writer with the current kernel's full driver set.
+- The built initramfs is inventoried before reboot; its compressed and unpacked sizes plus a runtime reserve must fit in installed RAM.
+- GRUB staging requires a plain ext2/3/4 boot filesystem, installs dedicated `next_entry` handling, and verifies the armed one-shot entry before rebooting.
 - The CHR filesystem offset is read from its MBR; it is not hard-coded.
 - DHCP probing sends only a DHCPDISCOVER packet and never installs an address or route on Linux.
 - The first-boot script identifies the RouterOS uplink using the existing virtual NIC MAC.
 - An unknown RouterOS version must pass structural checks and requires a typed acknowledgement. An incompatible layout is blocked.
 - A failed read-back checksum halts the writer instead of rebooting.
+
+## Recovery after interrupted staging
+
+Returned staging errors automatically unload a pending kexec image, clear an armed GRUB entry, remove installer-owned files, and regenerate `grub.cfg`. A power loss or forced process kill can bypass that cleanup. Before a later normal reboot, remove only these installer-owned artifacts:
+
+```bash
+sudo grub-editenv /boot/grub/grubenv unset next_entry
+sudo rm -f /etc/grub.d/42_chr_install /boot/chr-install/initrd.img /var/lib/chr-install/initrd.img
+sudo rmdir /boot/chr-install /var/lib/chr-install 2>/dev/null || true
+sudo update-grub
+```
+
+Timestamp refusals print the manifest time, writer clock, and bounded RTC adjustment. Restage from normal Linux after correcting a badly skewed RTC; do not boot an old writer entry manually.
 
 ## Building
 
