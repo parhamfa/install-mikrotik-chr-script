@@ -1,0 +1,68 @@
+name: Bug report
+description: Report incorrect detection, planning, staging, writing, or CHR boot behavior.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Run `chr-install --preflight` first when the Linux host is still available. Redact addresses and hardware identifiers before posting. Use private vulnerability reporting for security-sensitive failures.
+  - type: input
+    id: version
+    attributes:
+      label: chr-install version
+      description: Paste the complete output of `chr-install --version`.
+      placeholder: chr-install 1.0.0 (commit ..., built ...)
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host environment
+      description: Distribution, version, firmware mode, and virtualization platform if known.
+      placeholder: Ubuntu 24.04, BIOS, QEMU/KVM
+    validations:
+      required: true
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Failure phase
+      options:
+        - Preflight
+        - Interactive review
+        - Image preparation
+        - Writer staging
+        - Pre-root writing
+        - CHR first boot
+        - Bootstrap or release verification
+    validations:
+      required: true
+  - type: textarea
+    id: preflight
+    attributes:
+      label: Redacted preflight report
+      description: If available, preserve topology and finding codes, but remove public addresses and unique identifiers.
+      render: text
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened?
+      description: Include exact errors and relevant console output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened?
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials and unintended public IP, MAC, disk, and provider identifiers.
+          required: true
+        - label: I understand that public issues are not an emergency recovery channel.
+          required: true

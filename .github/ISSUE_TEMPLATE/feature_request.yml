@@ -1,0 +1,34 @@
+name: Feature request
+description: Propose a capability that remains within chr-install's OS-swap and network-preservation contract.
+title: "feature: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Unsupported use case
+      description: Describe the host capability or network layout that currently blocks installation.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Detection evidence
+      description: Explain which kernel, network-manager, configuration, lease, firmware, or disk evidence can verify the capability without provider-specific assumptions.
+    validations:
+      required: true
+  - type: textarea
+    id: failure
+    attributes:
+      label: Safe failure behavior
+      description: State when the installer must refuse rather than infer.
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: This request is about installing CHR or preserving connectivity, not RouterOS hardening or general configuration management.
+          required: true

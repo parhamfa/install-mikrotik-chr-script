@@ -1,5 +1,10 @@
 # chr-install
 
+[![CI](https://github.com/parhamfa/chr-install/actions/workflows/ci.yml/badge.svg)](https://github.com/parhamfa/chr-install/actions/workflows/ci.yml)
+[![Full CHR/QEMU test](https://github.com/parhamfa/chr-install/actions/workflows/qemu.yml/badge.svg)](https://github.com/parhamfa/chr-install/actions/workflows/qemu.yml)
+[![Latest release](https://img.shields.io/github/v/release/parhamfa/chr-install)](https://github.com/parhamfa/chr-install/releases/latest)
+[![MIT License](https://img.shields.io/github/license/parhamfa/chr-install)](LICENSE)
+
 `chr-install` is an interactive, fail-closed installer that replaces a supported Debian or Ubuntu server with MikroTik CHR while preserving a reviewed Layer-3 network configuration.
 
 It is intentionally not a RouterOS hardening tool. It does not create passwords or users, change firewall policy, restrict services, configure licensing, or make unrelated RouterOS changes.
@@ -29,15 +34,17 @@ V1 also blocks a Linux host that is currently booted with UEFI unless that exact
 Download the release manually or use the bootstrap:
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/parhamfa/install-mikrotik-chr-script/main/installer.sh)" -- --preflight
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/parhamfa/chr-install/main/installer.sh)" -- --preflight
 ```
 
 Preflight does not modify the server. It reports the resolved target disk, installation path, current addresses and routes, DNS, MTU, DHCP availability, current RouterOS long-term release, and any blockers.
 
+Static Linux AMD64 binaries and their SHA-256 checksums are available from [GitHub Releases](https://github.com/parhamfa/chr-install/releases/latest).
+
 ## Install
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/parhamfa/install-mikrotik-chr-script/main/installer.sh)"
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/parhamfa/chr-install/main/installer.sh)"
 ```
 
 The wizard will:
@@ -75,13 +82,17 @@ The full CHR/QEMU test is intentionally opt-in because it downloads MikroTik's o
 sudo env CHR_QEMU_INTEGRATION=1 go test -tags=integration -run TestQEMUBoot ./internal/integration -v
 ```
 
-The release workflow also runs privileged network-namespace scenarios and boots the pre-root writer against a disposable serialized disk. Its CHR matrix logs in through the untouched serial console and verifies the MAC-selected interface, address binding, routes, DNS, MTU, DHCP cleanup, and gateway reachability. Those tests are required before assets are published; a post-release smoke job then exercises the legacy raw `installer.sh` URL and its checksum bootstrap.
+The release workflow also runs privileged network-namespace scenarios and boots the pre-root writer against a disposable serialized disk. Its CHR matrix logs in through the untouched serial console and verifies the MAC-selected interface, address binding, routes, DNS, MTU, DHCP cleanup, and gateway reachability. Those tests are required before assets are published; a post-release smoke job then exercises both the canonical and legacy-redirect raw `installer.sh` URLs and their checksum bootstrap.
 
 ## Project history
 
-This is an in-place rewrite of `parhamfa/install-mikrotik-chr-script`. The repository history and contributor attribution remain intact. The last DHCP-only shell implementation will be retained under the `legacy-shell-final` tag when v1 reaches its release gate.
+This is an in-place rewrite of `parhamfa/install-mikrotik-chr-script`. The repository history and contributor attribution remain intact. The last DHCP-only shell implementation is preserved under the [`legacy-shell-final`](https://github.com/parhamfa/chr-install/tree/legacy-shell-final) tag.
 
-The repository will be renamed to `parhamfa/chr-install` only after the `v1.0.0` assets and old bootstrap URL pass the release smoke tests. The old repository name must never be reused because doing so would break GitHub's redirects.
+The same repository was renamed to `parhamfa/chr-install` after the [`v1.0.0`](https://github.com/parhamfa/chr-install/releases/tag/v1.0.0) assets, full QEMU matrix, and legacy bootstrap URL passed their release gates. GitHub redirects the retired web, Git, raw-file, and release URLs. The old repository name must never be reused because that would break those redirects.
+
+## Security
+
+Report vulnerabilities privately according to [SECURITY.md](SECURITY.md). Do not disclose a disk-writing or network-preservation vulnerability in a public issue before it can be assessed.
 
 ## License
 
