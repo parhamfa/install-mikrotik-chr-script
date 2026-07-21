@@ -189,6 +189,43 @@ func TestInspectRouteSetRejectsUntranslatedStaticRoute(t *testing.T) {
 	}
 }
 
+func TestInspectRouteSetAllowsBareGatewayHostRoute(t *testing.T) {
+	defaultRoute := &route{Destination: "default", Gateway: "10.0.0.1", Device: "net0", Protocol: "static"}
+	issues := inspectRouteSet([]route{
+		*defaultRoute,
+		{Destination: "10.0.0.1", Device: "net0", Protocol: "static", Scope: "link"},
+	}, defaultRoute, "net0", "IPv4")
+	if len(issues) != 0 {
+		t.Fatalf("gateway host route was rejected: %#v", issues)
+	}
+}
+
+func TestIsGatewayHostRoute(t *testing.T) {
+	tests := []struct {
+		name        string
+		destination string
+		gateway     string
+		want        bool
+	}{
+		{name: "bare IPv4", destination: "10.0.0.1", gateway: "10.0.0.1", want: true},
+		{name: "IPv4 host prefix", destination: "10.0.0.1/32", gateway: "10.0.0.1", want: true},
+		{name: "bare IPv6", destination: "2001:db8::1", gateway: "2001:db8::1", want: true},
+		{name: "IPv6 host prefix", destination: "2001:db8::1/128", gateway: "2001:db8::1", want: true},
+		{name: "zoned IPv6 gateway", destination: "fe80::1", gateway: "fe80::1%ens3", want: true},
+		{name: "non-host prefix", destination: "10.0.0.0/24", gateway: "10.0.0.1", want: false},
+		{name: "different host", destination: "10.0.0.2", gateway: "10.0.0.1", want: false},
+		{name: "invalid destination", destination: "not-an-address", gateway: "10.0.0.1", want: false},
+		{name: "invalid gateway", destination: "10.0.0.1", gateway: "not-an-address", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isGatewayHostRoute(test.destination, test.gateway); got != test.want {
+				t.Fatalf("isGatewayHostRoute(%q, %q) = %t, want %t", test.destination, test.gateway, got, test.want)
+			}
+		})
+	}
+}
+
 func TestSystemdLeaseMustMatchSelectedInterfaceIndex(t *testing.T) {
 	root := t.TempDir()
 	leaseDir := filepath.Join(root, "run", "systemd", "netif", "leases")

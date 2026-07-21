@@ -351,9 +351,18 @@ func isDefaultRoute(destination string) bool {
 }
 
 func isGatewayHostRoute(destination, gateway string) bool {
-	prefix, prefixErr := netip.ParsePrefix(strings.TrimSpace(destination))
-	address, addressErr := netip.ParseAddr(strings.TrimSpace(strings.Split(gateway, "%")[0]))
-	return prefixErr == nil && addressErr == nil && prefix.Bits() == prefix.Addr().BitLen() && prefix.Addr() == address
+	gatewayAddress, err := netip.ParseAddr(strings.TrimSpace(gateway))
+	if err != nil {
+		return false
+	}
+	gatewayAddress = gatewayAddress.WithZone("")
+
+	destination = strings.TrimSpace(destination)
+	if destinationAddress, err := netip.ParseAddr(destination); err == nil {
+		return destinationAddress.WithZone("") == gatewayAddress
+	}
+	prefix, err := netip.ParsePrefix(destination)
+	return err == nil && prefix.Bits() == prefix.Addr().BitLen() && prefix.Addr() == gatewayAddress
 }
 
 func emptyRouteValue(value string) string {
