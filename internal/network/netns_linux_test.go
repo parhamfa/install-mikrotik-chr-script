@@ -45,6 +45,18 @@ func TestNetworkNamespacePlans(t *testing.T) {
 		}
 	})
 
+	t.Run("static IPv4 with explicit gateway host route", func(t *testing.T) {
+		fixture := newNamespaceFixture(t, 4, 1500, "nameserver 8.8.8.8\n", "")
+		fixture.ip("address", "add", "198.51.100.10/32", "dev", "uplink")
+		fixture.ip("route", "add", "192.0.2.1/32", "dev", "uplink")
+		fixture.ip("route", "add", "default", "via", "192.0.2.1", "dev", "uplink")
+		plan, issues := Detect(context.Background(), fixture.runner(), namespaceProber{}, fixture.root)
+		assertNoBlockers(t, issues)
+		if plan.IPv4.Mode != "static" || strings.Join(plan.IPv4.Addresses, ",") != "198.51.100.10/32" || plan.IPv4.Gateway != "192.0.2.1" || !plan.IPv4.GatewayOnLink {
+			t.Fatalf("unexpected explicit host-route IPv4 plan: %#v", plan.IPv4)
+		}
+	})
+
 	t.Run("DHCP DISCOVER offer", func(t *testing.T) {
 		config := "network:\n  ethernets:\n    uplink:\n      dhcp4: true\n"
 		fixture := newNamespaceFixture(t, 2, 1500, "nameserver 192.0.2.53\n", config)
