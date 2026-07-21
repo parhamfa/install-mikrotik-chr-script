@@ -45,10 +45,12 @@ func RouterOSScript(plan model.NetworkPlan) (string, error) {
 			prefix, _ := netip.ParsePrefix(address)
 			lines = append(lines, fmt.Sprintf("/ip/address/add address=%s interface=$uplinkName comment=\"chr-install\"", prefix.String()))
 		}
+		targetScope := ""
 		if plan.IPv4.GatewayOnLink {
 			lines = append(lines, fmt.Sprintf("/ip/route/add dst-address=%s/32 gateway=$uplinkName scope=10 comment=\"chr-install\"", plan.IPv4.Gateway))
+			targetScope = " target-scope=11"
 		}
-		lines = append(lines, fmt.Sprintf("/ip/route/add dst-address=0.0.0.0/0 gateway=%s comment=\"chr-install\"", plan.IPv4.Gateway))
+		lines = append(lines, fmt.Sprintf("/ip/route/add dst-address=0.0.0.0/0 gateway=%s%s comment=\"chr-install\"", plan.IPv4.Gateway, targetScope))
 	}
 
 	lines = append(lines, fmt.Sprintf("/ipv6/settings/set accept-router-advertisements=%s", rosBool(plan.IPv6.SLAAC)))
@@ -63,7 +65,8 @@ func RouterOSScript(plan model.NetworkPlan) (string, error) {
 	}
 	if plan.IPv6.Gateway != "" {
 		gateway := strings.Split(plan.IPv6.Gateway, "%")[0]
-		if plan.IPv6.GatewayOnLink && !mustAddr(gateway).IsLinkLocalUnicast() {
+		recursiveGateway := plan.IPv6.GatewayOnLink && !mustAddr(gateway).IsLinkLocalUnicast()
+		if recursiveGateway {
 			lines = append(lines, fmt.Sprintf("/ipv6/route/add dst-address=%s/128 gateway=$uplinkName scope=10 comment=\"chr-install\"", gateway))
 		}
 		if mustAddr(gateway).IsLinkLocalUnicast() {
@@ -72,7 +75,11 @@ func RouterOSScript(plan model.NetworkPlan) (string, error) {
 				"/ipv6/route/add dst-address=::/0 gateway=$ipv6Gateway comment=\"chr-install\"",
 			)
 		} else {
-			lines = append(lines, fmt.Sprintf("/ipv6/route/add dst-address=::/0 gateway=%s comment=\"chr-install\"", gateway))
+			targetScope := ""
+			if recursiveGateway {
+				targetScope = " target-scope=11"
+			}
+			lines = append(lines, fmt.Sprintf("/ipv6/route/add dst-address=::/0 gateway=%s%s comment=\"chr-install\"", gateway, targetScope))
 		}
 	}
 	if len(plan.DNS) > 0 {
