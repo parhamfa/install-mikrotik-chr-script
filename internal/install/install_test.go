@@ -160,6 +160,26 @@ func TestReadSCSIVPDSerial(t *testing.T) {
 	}
 }
 
+func TestManifestTimestampAcceptsRecordedRTCOffset(t *testing.T) {
+	created := time.Date(2026, time.July, 21, 12, 0, 0, 0, time.UTC)
+	manifest := validManifest("/chr.img")
+	manifest.CreatedAt = created
+	manifest.RTCOffset = -2 * 60 * 60
+	if err := manifest.validateTimestamp(created.Add(2 * time.Hour)); err != nil {
+		t.Fatalf("recorded RTC offset should recover a bounded clock skew: %v", err)
+	}
+}
+
+func TestManifestTimestampRejectsStaleEntryWithDiagnostics(t *testing.T) {
+	created := time.Date(2026, time.July, 20, 10, 0, 0, 0, time.UTC)
+	manifest := validManifest("/chr.img")
+	manifest.CreatedAt = created
+	err := manifest.validateTimestamp(created.Add(25 * time.Hour))
+	if err == nil || !strings.Contains(err.Error(), "created=2026-07-20T10:00:00Z") || !strings.Contains(err.Error(), "writer_clock=2026-07-21T11:00:00Z") {
+		t.Fatalf("expected timestamp diagnostics, got %v", err)
+	}
+}
+
 func validManifest(image string) Manifest {
 	return Manifest{
 		Schema:      manifestSchema,

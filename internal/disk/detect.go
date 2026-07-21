@@ -132,8 +132,12 @@ func Detect(ctx context.Context, runner command.Runner, root string) (model.Disk
 	} else if !supportedStorageDriver(result.Fingerprint.Driver) {
 		issues = append(issues, blocker("disk-driver", fmt.Sprintf("storage driver %s has not been validated for CHR", result.Fingerprint.Driver)))
 	}
-	if target.Serial == "" && target.WWN == "" {
-		issues = append(issues, model.Issue{Severity: model.SeverityWarning, Code: "disk-identity", Message: "target disk has no serial or WWN; the writer will require name, size, and major/minor identity to remain unchanged"})
+	if result.Fingerprint.Serial == "" && result.Fingerprint.WWN == "" {
+		if result.RootBacked && len(g.disks) > 1 {
+			issues = append(issues, blocker("disk-identity", "multiple disks are visible but the target has no serial or WWN; reboot-time disk identity cannot be proven safely"))
+		} else {
+			issues = append(issues, model.Issue{Severity: model.SeverityWarning, Code: "disk-identity", Message: "target disk has no serial or WWN; the writer will require name, size, and major/minor identity to remain unchanged"})
+		}
 	}
 	if len(g.disks) > 1 && result.RootBacked {
 		issues = append(issues, model.Issue{Severity: model.SeverityWarning, Code: "extra-disks", Message: fmt.Sprintf("%d disks are visible; only the disk backing / is targeted", len(g.disks))})
@@ -365,13 +369,28 @@ func configureStaging(ctx context.Context, runner command.Runner, root string, r
 	if _, err := runner.LookPath("mkinitramfs"); err != nil {
 		*issues = append(*issues, blocker("initramfs-builder", "mkinitramfs is required to build the RAM-backed writer from the host kernel and modules"))
 	}
+	if _, err := runner.LookPath("lsinitramfs"); err != nil {
+		*issues = append(*issues, blocker("initramfs-inspector", "lsinitramfs is required to measure the built RAM-backed writer"))
+	}
 
 	_, kexecErr := runner.LookPath("kexec")
 	result.Kexec = kexecErr == nil && !secureBootEnabled(root) && !kexecDisabled(root)
 	_, grubRebootErr := runner.LookPath("grub-reboot")
 	_, updateGrubErr := runner.LookPath("update-grub")
 	_, grubProbeErr := runner.LookPath("grub-probe")
-	result.GRUB = grubRebootErr == nil && updateGrubErr == nil && grubProbeErr == nil
+	_, grubEditEnvErr := runner.LookPath("grub-editenv")
+	result.GRUB = grubRebootErr == nil && updateGrubErr == nil && grubProbeErr == nil && grubEditEnvErr == nil
+	if result.GRUB {
+		supported, reason := inspectGRUBEnvironment(ctx, runner, root)
+		result.GRUB = supported
+		if !supported {
+			severity := model.SeverityWarning
+			if !result.Kexec {
+				severity = model.SeverityBlocker
+			}
+			*issues = append(*issues, model.Issue{Severity: severity, Code: "grub-one-shot", Message: reason})
+		}
+	}
 
 	switch {
 	case result.Kexec:
@@ -381,6 +400,25 @@ func configureStaging(ctx context.Context, runner command.Runner, root string, r
 	default:
 		*issues = append(*issues, blocker("staging", "neither usable kexec nor one-shot GRUB staging is available"))
 	}
+}
+
+func inspectGRUBEnvironment(ctx context.Context, runner command.Runner, root string) (bool, string) {
+	environmentPath := filepath.Join(root, "boot", "grub", "grubenv")
+	filesystem, err := runner.Run(ctx, "grub-probe", "--target=fs", environmentPath)
+	if err != nil {
+		return false, fmt.Sprintf("cannot inspect the GRUB one-shot environment: %v", err)
+	}
+	if value := strings.TrimSpace(string(filesystem)); value != "ext2" {
+		return false, fmt.Sprintf("GRUB one-shot staging requires an ext2/3/4 boot filesystem; detected %q", value)
+	}
+	abstraction, err := runner.Run(ctx, "grub-probe", "--target=abstraction", environmentPath)
+	if err != nil {
+		return false, fmt.Sprintf("cannot inspect GRUB boot storage: %v", err)
+	}
+	if value := strings.TrimSpace(string(abstraction)); value != "" {
+		return false, fmt.Sprintf("GRUB one-shot staging does not support boot storage abstraction %q", value)
+	}
+	return true, ""
 }
 
 func secureBootEnabled(root string) bool {

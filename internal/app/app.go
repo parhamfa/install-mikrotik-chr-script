@@ -64,13 +64,9 @@ func Run(ctx context.Context, options Options) error {
 		return err
 	}
 	if reportValue.Disk.RootBacked {
-		initrdInfo, err := os.Stat(reportValue.Disk.InitrdPath)
-		if err != nil {
-			return err
-		}
-		required := uint64(prepared.SizeBytes+initrdInfo.Size()) + 384*1024*1024
+		required := uint64(prepared.SizeBytes) + 512*1024*1024
 		if reportValue.Host.MemoryBytes < required {
-			return fmt.Errorf("staged writer needs at least %d bytes of RAM for this image and initramfs; host has %d", required, reportValue.Host.MemoryBytes)
+			return fmt.Errorf("staged writer needs at least %d bytes of RAM before its exact initramfs can be measured; host has %d", required, reportValue.Host.MemoryBytes)
 		}
 	}
 	if !reportValue.Release.Tested {
@@ -87,7 +83,7 @@ func Run(ctx context.Context, options Options) error {
 			return fmt.Errorf("target revalidation failed: %s", issue.Message)
 		}
 	}
-	if revalidatedDisk.RootBacked != reportValue.Disk.RootBacked || revalidatedDisk.Method != reportValue.Disk.Method || !install.FingerprintsMatch(reportValue.Disk.Fingerprint, revalidatedDisk.Fingerprint) {
+	if !sameInstallTarget(reportValue.Disk, revalidatedDisk) {
 		return fmt.Errorf("target disk or installation method changed after review; refusing to continue")
 	}
 	executable, err := os.Readlink("/proc/self/exe")
@@ -95,9 +91,13 @@ func Run(ctx context.Context, options Options) error {
 		executable = filepath.Clean(os.Args[0])
 	}
 	manifest := install.NewManifest(reportValue.Disk.Fingerprint, prepared.Path, prepared.SHA256, prepared.SizeBytes, prepared.Release, review.Network)
-	return install.StageAndBoot(ctx, runner, reportValue.Disk, prepared.Path, executable, manifest)
+	return install.StageAndBoot(ctx, runner, reportValue.Disk, prepared.Path, executable, manifest, reportValue.Host.MemoryBytes)
 }
 
 func ReadyForInstall(report model.Preflight) bool {
 	return !report.Blocked()
+}
+
+func sameInstallTarget(before, after model.Disk) bool {
+	return before.RootBacked == after.RootBacked && before.Method == after.Method && install.FingerprintsMatch(before.Fingerprint, after.Fingerprint)
 }

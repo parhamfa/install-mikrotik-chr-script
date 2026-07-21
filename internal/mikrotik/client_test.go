@@ -56,6 +56,26 @@ func TestGetSmallRejectsOversizedMetadata(t *testing.T) {
 	}
 }
 
+func TestGetSmallRetriesTransientStatus(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) < 3 {
+			http.Error(writer, "temporary", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = writer.Write([]byte("metadata"))
+	}))
+	defer server.Close()
+	client := NewClient()
+	body, err := client.getSmall(context.Background(), server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "metadata" || attempts.Load() != 3 {
+		t.Fatalf("unexpected retry result: attempts=%d body=%q", attempts.Load(), body)
+	}
+}
+
 func TestDownloadResumesTruncatedResponse(t *testing.T) {
 	payload := []byte("complete archive")
 	var attempts atomic.Int32

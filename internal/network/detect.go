@@ -580,8 +580,3 @@ func appendIssue(issues []model.Issue, issue *model.Issue) []model.Issue {
 func blocker(code, message string) model.Issue {
 	return model.Issue{Severity: model.SeverityBlocker, Code: code, Message: message}
 }
-
-func parseMTU(value string) int {
-	mtu, _ := strconv.Atoi(strings.TrimSpace(value))
-	return mtu
-}
