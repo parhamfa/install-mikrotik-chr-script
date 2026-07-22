@@ -99,5 +99,5 @@ func ReadyForInstall(report model.Preflight) bool {
 }
 
 func sameInstallTarget(before, after model.Disk) bool {
-	return before.RootBacked == after.RootBacked && before.Method == after.Method && install.FingerprintsMatch(before.Fingerprint, after.Fingerprint)
+	return before.RootBacked == after.RootBacked && before.Method == after.Method && disk.FingerprintsMatch(before.Fingerprint, after.Fingerprint)
 }
