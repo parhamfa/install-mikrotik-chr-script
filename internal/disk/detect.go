@@ -21,9 +21,6 @@ type blockNode struct {
 	Type        string      `json:"type"`
 	PKName      string      `json:"pkname"`
 	Size        uint64      `json:"size"`
-	Model       string      `json:"model"`
-	Serial      string      `json:"serial"`
-	WWN         string      `json:"wwn"`
 	Transport   string      `json:"tran"`
 	MajorMinor  string      `json:"maj:min"`
 	ReadOnly    bool        `json:"ro"`
@@ -76,7 +73,7 @@ func Detect(ctx context.Context, runner command.Runner, root string) (model.Disk
 		}
 	}
 
-	lsblkOutput, err := runner.Run(ctx, "lsblk", "-J", "-b", "-o", "NAME,KNAME,PATH,TYPE,PKNAME,SIZE,MODEL,SERIAL,WWN,TRAN,MAJ:MIN,RO,RM,MOUNTPOINTS")
+	lsblkOutput, err := runner.Run(ctx, "lsblk", "-J", "-b", "-o", "NAME,KNAME,PATH,TYPE,PKNAME,SIZE,TRAN,MAJ:MIN,RO,RM,MOUNTPOINTS")
 	if err != nil {
 		return result, []model.Issue{blocker("block-devices", err.Error())}
 	}
@@ -121,7 +118,17 @@ func Detect(ctx context.Context, runner command.Runner, root string) (model.Disk
 		return result, append(issues, blocker("target-disk", "no target disk was selected"))
 	}
 	result.Fingerprint = fingerprint(root, target)
-	if target.Size < 256*1024*1024 {
+	if result.Fingerprint.SizeBytes == 0 {
+		issues = append(issues, blocker("disk-metadata", fmt.Sprintf("cannot read the size of %s from sysfs", target.Path)))
+	} else if target.Size != 0 && target.Size != result.Fingerprint.SizeBytes {
+		issues = append(issues, blocker("disk-metadata", fmt.Sprintf("lsblk and sysfs disagree about the size of %s", target.Path)))
+	}
+	if result.Fingerprint.MajorMinor == "" {
+		issues = append(issues, blocker("disk-metadata", fmt.Sprintf("cannot read the major:minor identity of %s from sysfs", target.Path)))
+	} else if target.MajorMinor != "" && target.MajorMinor != result.Fingerprint.MajorMinor {
+		issues = append(issues, blocker("disk-metadata", fmt.Sprintf("lsblk and sysfs disagree about the major:minor identity of %s", target.Path)))
+	}
+	if result.Fingerprint.SizeBytes < 256*1024*1024 {
 		issues = append(issues, blocker("disk-size", "target disk is smaller than 256 MiB"))
 	}
 	if !supportedKernelName(target.KName) {
@@ -133,10 +140,10 @@ func Detect(ctx context.Context, runner command.Runner, root string) (model.Disk
 		issues = append(issues, blocker("disk-driver", fmt.Sprintf("storage driver %s has not been validated for CHR", result.Fingerprint.Driver)))
 	}
 	if result.Fingerprint.Serial == "" && result.Fingerprint.WWN == "" {
-		if result.RootBacked && len(g.disks) > 1 {
-			issues = append(issues, blocker("disk-identity", "multiple disks are visible but the target has no serial or WWN; reboot-time disk identity cannot be proven safely"))
+		if len(g.disks) != 1 {
+			issues = append(issues, blocker("disk-identity", "target has no reboot-observable serial or WWN, and fallback is forbidden unless exactly one physical disk is visible"))
 		} else {
-			issues = append(issues, model.Issue{Severity: model.SeverityWarning, Code: "disk-identity", Message: "target disk has no serial or WWN; the writer will require name, size, and major/minor identity to remain unchanged"})
+			issues = append(issues, model.Issue{Severity: model.SeverityWarning, Code: "disk-identity", Message: "target has no reboot-observable serial or WWN; exactly one physical disk is visible, so the writer will require kernel name, major:minor, size, and driver to remain unchanged"})
 		}
 	}
 	if len(g.disks) > 1 && result.RootBacked {
@@ -276,47 +283,10 @@ func fingerprint(root string, node *blockNode) model.DiskFingerprint {
 	if path == "" {
 		path = "/dev/" + node.KName
 	}
-	return model.DiskFingerprint{
-		Path:       path,
-		KernelName: node.KName,
-		MajorMinor: node.MajorMinor,
-		SizeBytes:  node.Size,
-		Model:      strings.TrimSpace(node.Model),
-		Serial:     strings.TrimSpace(node.Serial),
-		WWN:        strings.TrimSpace(node.WWN),
-		Transport:  strings.TrimSpace(node.Transport),
-		Driver:     readDriver(root, node.KName),
-	}
-}
-
-func readDriver(root, kernelName string) string {
-	devicePath := filepath.Join(root, "sys", "class", "block", kernelName, "device")
-	if driver := driverFromDevice(devicePath); driver != "" {
-		return driver
-	}
-	// Test fixtures use a regular file because git cannot represent sysfs links.
-	if data, readErr := os.ReadFile(filepath.Join(devicePath, "driver")); readErr == nil {
-		return strings.TrimSpace(string(data))
-	}
-	return ""
-}
-
-func driverFromDevice(devicePath string) string {
-	current, err := filepath.EvalSymlinks(devicePath)
-	if err != nil {
-		return ""
-	}
-	for depth := 0; depth < 16; depth++ {
-		if resolved, err := filepath.EvalSymlinks(filepath.Join(current, "driver")); err == nil && filepath.Base(resolved) != "driver" {
-			return filepath.Base(resolved)
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			break
-		}
-		current = parent
-	}
-	return ""
+	fingerprint := FingerprintFromSysfs(root, node.KName)
+	fingerprint.Path = path
+	fingerprint.Transport = strings.TrimSpace(node.Transport)
+	return fingerprint
 }
 
 func supportedStorageDriver(driver string) bool {

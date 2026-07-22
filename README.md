@@ -19,7 +19,7 @@ It is intentionally not a RouterOS hardening tool. It does not create passwords 
 - Ubuntu 22.04, 24.04, and 26.04 LTS
 - Firmware modes validated for the exact RouterOS release (7.21.5: legacy BIOS)
 - One unambiguous local boot disk
-- A serial or WWN for the target when additional disks are visible during a root-backed install
+- A reboot-observable serial or WWN for the target when additional physical disks are visible
 - One Ethernet uplink with a single routing policy
 - IPv4 DHCP or static addressing
 - IPv6 SLAAC, DHCPv6, static addressing, or combinations of those modes
@@ -62,7 +62,10 @@ There is no unattended mode and no reboot countdown.
 ## Safety model
 
 - The target disk is derived from the filesystem backing `/`, then its ancestry and fingerprint are rechecked after review.
-- The writer records the disk serial/WWN, size, kernel name, and major/minor identity, then checks them again immediately before writing.
+- Preflight and the RAM writer use the same sysfs collector for size, major/minor, driver, serial, and WWN; `lsblk` is used only to resolve topology, path, and transport.
+- SCSI identity prefers logical-unit VPD page `0x83` NAA, EUI-64, T10-vendor, and vendor-specific descriptors, in that order. Page `0x80` and direct sysfs serials are fallbacks only when page `0x83` has no usable logical-unit identity.
+- If no stable identity is observable across reboot, installation is allowed only while exactly one physical disk is visible. The writer then requires kernel name, major/minor, size, and driver to remain identical and emits a `disk-identity` warning. A multi-disk host is blocked.
+- A stable serial or WWN recorded before reboot may never degrade to the single-disk fallback; disappearance or change halts before writing.
 - A normal running root disk is never overwritten from normal userspace; `mkinitramfs` rebuilds a RAM writer with the current kernel's full driver set.
 - The built initramfs is inventoried before reboot; its compressed and unpacked sizes plus a runtime reserve must fit in installed RAM.
 - GRUB staging requires a plain ext2/3/4 boot filesystem, installs dedicated `next_entry` handling, and verifies the armed one-shot entry before rebooting.
@@ -98,7 +101,7 @@ The full CHR/QEMU test is intentionally opt-in because it downloads MikroTik's o
 sudo env CHR_QEMU_INTEGRATION=1 go test -tags=integration -run TestQEMUBoot ./internal/integration -v
 ```
 
-The release workflow also runs privileged network-namespace scenarios and boots the pre-root writer against a disposable serialized disk. Its CHR matrix logs in through the untouched serial console and verifies the MAC-selected interface, address binding, routes, DNS, MTU, DHCP cleanup, and gateway reachability. Those tests are required before assets are published; a post-release smoke job then exercises both the canonical and legacy-redirect raw `installer.sh` URLs and their checksum bootstrap.
+The release workflow also runs privileged network-namespace scenarios and boots the pre-root writer against disposable virtio, SCSI, and NVMe disks. The SCSI workflow first performs a read-only probe boot, builds its manifest from the observed sysfs fingerprint, and then requires the writer boot to reproduce that identity. Its CHR matrix logs in through the untouched serial console and verifies the MAC-selected interface, address binding, routes, DNS, MTU, DHCP cleanup, and gateway reachability. Those tests are required before assets are published; a post-release smoke job then exercises both the canonical and legacy-redirect raw `installer.sh` URLs and their checksum bootstrap.
 
 ## Project history
 

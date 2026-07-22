@@ -8,10 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/parhamfa/chr-install/internal/disk"
 	"github.com/parhamfa/chr-install/internal/mikrotik"
 	"github.com/parhamfa/chr-install/internal/model"
 	"golang.org/x/sys/unix"
@@ -115,42 +115,19 @@ func waitForFingerprint(expected model.DiskFingerprint, timeout time.Duration) (
 }
 
 func findFingerprint(expected model.DiskFingerprint) (string, error) {
-	entries, err := os.ReadDir("/sys/class/block")
+	candidates, err := disk.SysfsDisks("/")
 	if err != nil {
 		return "", err
 	}
-	var matches []string
 	var observed []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if _, err := os.Stat(filepath.Join("/sys/class/block", name, "partition")); err == nil {
-			continue
-		}
-		candidate := sysfsFingerprint(name)
+	for _, candidate := range candidates {
 		observed = append(observed, fmt.Sprintf("%s size=%d serial=%q wwn=%q major:minor=%q driver=%q", candidate.Path, candidate.SizeBytes, candidate.Serial, candidate.WWN, candidate.MajorMinor, candidate.Driver))
-		if FingerprintsMatch(expected, candidate) {
-			matches = append(matches, "/dev/"+name)
-		}
 	}
-	if len(matches) != 1 {
-		return "", fmt.Errorf("disk fingerprint matched %d devices; expected exactly one (authorized size=%d identity=%q; observed: %s)", len(matches), expected.SizeBytes, expected.StableIdentity(), strings.Join(observed, "; "))
+	match, err := disk.SelectAuthorizedFingerprint(expected, candidates)
+	if err != nil {
+		return "", fmt.Errorf("%w (authorized size=%d identity=%q; observed: %s)", err, expected.SizeBytes, expected.StableIdentity(), strings.Join(observed, "; "))
 	}
-	return matches[0], nil
-}
-
-func sysfsFingerprint(name string) model.DiskFingerprint {
-	base := filepath.Join("/sys/class/block", name)
-	sectors, _ := strconv.ParseUint(readTrim(filepath.Join(base, "size")), 10, 64)
-	return model.DiskFingerprint{
-		Path:       "/dev/" + name,
-		KernelName: name,
-		MajorMinor: readTrim(filepath.Join(base, "dev")),
-		SizeBytes:  sectors * 512,
-		Model:      readTrim(filepath.Join(base, "device", "model")),
-		Serial:     firstNonempty(readTrim(filepath.Join(base, "device", "serial")), readTrim(filepath.Join(base, "serial")), readSCSIVPDSerial(base)),
-		WWN:        firstNonempty(readTrim(filepath.Join(base, "wwid")), readTrim(filepath.Join(base, "device", "wwid"))),
-		Driver:     driverFromSysfsDevice(filepath.Join(base, "device")),
-	}
+	return match.Path, nil
 }
 
 func ensureUnmounted(targetPath string) error {
@@ -244,15 +221,6 @@ func logWriter(format string, values ...any) {
 func readTrim(path string) string {
 	data, _ := os.ReadFile(path)
 	return strings.TrimSpace(string(data))
-}
-
-func firstNonempty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
 
 func HaltWriter(err error) {

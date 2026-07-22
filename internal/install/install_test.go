@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -113,50 +112,6 @@ func TestWriterCmdline(t *testing.T) {
 	got := writerCmdline("BOOT_IMAGE=/boot/vmlinuz root=/dev/sda1 ro quiet initrd=/boot/initrd chr.install=old")
 	if got != "root=/dev/sda1 ro quiet chr.install=1" {
 		t.Fatalf("writerCmdline() = %q", got)
-	}
-}
-
-func TestFingerprintComparisonRequiresRecordedStableIdentity(t *testing.T) {
-	expected := model.DiskFingerprint{KernelName: "vda", MajorMinor: "252:0", SizeBytes: 1024, Serial: "Disk-01"}
-	matching := model.DiskFingerprint{KernelName: "vdb", MajorMinor: "252:16", SizeBytes: 1024, Serial: "disk01"}
-	if !fingerprintsMatch(expected, matching) {
-		t.Fatal("normalized stable serial should match even when the kernel name changes")
-	}
-	expected.Driver, matching.Driver = "virtio_blk", "nvme"
-	if FingerprintsMatch(expected, matching) {
-		t.Fatal("a changed storage driver must fail userspace revalidation")
-	}
-	matching.Driver = ""
-	if FingerprintsMatch(expected, matching) {
-		t.Fatal("a missing storage driver must fail revalidation")
-	}
-	missing := model.DiskFingerprint{KernelName: "vda", MajorMinor: "252:0", SizeBytes: 1024}
-	if fingerprintsMatch(expected, missing) {
-		t.Fatal("fallback identity must not replace a stable identity that disappeared")
-	}
-	changedSize := matching
-	changedSize.SizeBytes++
-	if fingerprintsMatch(expected, changedSize) {
-		t.Fatal("a changed disk size must not match")
-	}
-}
-
-func TestReadSCSIVPDSerial(t *testing.T) {
-	base := t.TempDir()
-	device := filepath.Join(base, "device")
-	if err := os.MkdirAll(device, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	serial := []byte("chr-test-target")
-	page := make([]byte, 4+len(serial))
-	page[1] = 0x80
-	binary.BigEndian.PutUint16(page[2:4], uint16(len(serial)))
-	copy(page[4:], serial)
-	if err := os.WriteFile(filepath.Join(device, "vpd_pg80"), page, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if value := readSCSIVPDSerial(base); value != string(serial) {
-		t.Fatalf("readSCSIVPDSerial() = %q", value)
 	}
 }
 

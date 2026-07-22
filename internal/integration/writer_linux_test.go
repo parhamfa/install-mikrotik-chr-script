@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -57,6 +59,19 @@ func TestStagedWriterQEMU(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	version := os.Getenv("CHR_TEST_KERNEL_VERSION")
+	if version == "" {
+		version = strings.TrimPrefix(filepath.Base(kernel), "vmlinuz-")
+		if version == filepath.Base(kernel) {
+			t.Fatal("CHR_TEST_KERNEL_VERSION is required when the kernel filename is not versioned")
+		}
+	}
+	if os.Getenv("CHR_WRITER_DISK") == "scsi" {
+		targetDisk = probeDiskFingerprint(t, directory, kernel, version, targetDisk.Path, diskArguments)
+		if targetDisk.Serial == "" && targetDisk.WWN == "" {
+			t.Fatalf("SCSI probe did not produce a stable identity: %#v", targetDisk)
+		}
+	}
 	manifest := install.NewManifest(
 		targetDisk,
 		imagePath,
@@ -70,13 +85,6 @@ func TestStagedWriterQEMU(t *testing.T) {
 			IPv4:          model.IPv4Plan{Mode: "dhcp"},
 		},
 	)
-	version := os.Getenv("CHR_TEST_KERNEL_VERSION")
-	if version == "" {
-		version = strings.TrimPrefix(filepath.Base(kernel), "vmlinuz-")
-		if version == filepath.Base(kernel) {
-			t.Fatal("CHR_TEST_KERNEL_VERSION is required when the kernel filename is not versioned")
-		}
-	}
 	if err := install.BuildInitramfs(context.Background(), command.OSRunner{}, version, stagedInitrd, binaryPath, imagePath, manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -471,8 +479,16 @@ func TestDirectWriterLoopDevice(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Fatal("direct writer integration requires root")
 	}
-	if _, err := exec.LookPath("losetup"); err != nil {
-		t.Fatal(err)
+	if os.Getenv("CHR_DIRECT_WRITER_CHILD") == "1" {
+		if err := install.RunWriter(requireFile(t, "CHR_DIRECT_WRITER_MANIFEST"), false); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	for _, commandName := range []string{"losetup", "mount", "unshare"} {
+		if _, err := exec.LookPath(commandName); err != nil {
+			t.Fatal(err)
+		}
 	}
 	directory := t.TempDir()
 	payload := bytes.Repeat([]byte("chr-install-direct-writer\n"), 128*1024)
@@ -511,6 +527,7 @@ func TestDirectWriterLoopDevice(t *testing.T) {
 			KernelName: name,
 			MajorMinor: readIntegrationFile(t, filepath.Join("/sys/class/block", name, "dev")),
 			SizeBytes:  sectors * 512,
+			Driver:     "loop-test",
 		},
 		imagePath,
 		hash,
@@ -526,8 +543,32 @@ func TestDirectWriterLoopDevice(t *testing.T) {
 	if err := install.WriteManifest(manifestPath, manifest); err != nil {
 		t.Fatal(err)
 	}
-	if err := install.RunWriter(manifestPath, false); err != nil {
+	fakeClass := filepath.Join(directory, "sys-class-block")
+	fakeDisk := filepath.Join(fakeClass, name)
+	if err := os.MkdirAll(filepath.Join(fakeDisk, "device"), 0o700); err != nil {
 		t.Fatal(err)
+	}
+	for path, value := range map[string]string{
+		filepath.Join(fakeDisk, "size"):             fmt.Sprintf("%d\n", sectors),
+		filepath.Join(fakeDisk, "dev"):              manifest.Disk.MajorMinor + "\n",
+		filepath.Join(fakeDisk, "device", "type"):   "0\n",
+		filepath.Join(fakeDisk, "device", "driver"): manifest.Disk.Driver + "\n",
+	} {
+		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `mount --bind "$1" /sys/class/block
+shift
+exec "$@"`
+	child := exec.Command("unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c", script, "sh", fakeClass, executable, "-test.run=^TestDirectWriterLoopDevice$", "-test.v")
+	child.Env = append(os.Environ(), "CHR_DIRECT_WRITER_CHILD=1", "CHR_DIRECT_WRITER_MANIFEST="+manifestPath)
+	if output, err := child.CombinedOutput(); err != nil {
+		t.Fatalf("run direct writer in isolated sysfs namespace: %v\n%s", err, string(output))
 	}
 	written, err := os.ReadFile(targetPath)
 	if err != nil {
@@ -592,6 +633,93 @@ func copyIntegrationFile(source, destination string, mode os.FileMode) error {
 
 func shellQuoteIntegration(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+func probeDiskFingerprint(t *testing.T, directory, kernel, version, targetPath string, diskArguments []string) model.DiskFingerprint {
+	t.Helper()
+	probeBinary := filepath.Join(directory, "diskprobe")
+	probeInitrd := filepath.Join(directory, "diskprobe-initrd.img")
+	probeLog := filepath.Join(directory, "diskprobe-serial.log")
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate integration source directory")
+	}
+	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
+	build := exec.Command("go", "build", "-trimpath", "-o", probeBinary, "./internal/integration/testdata/diskprobe")
+	build.Dir = repositoryRoot
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build disk probe: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	configDirectory := filepath.Join(directory, "diskprobe-config")
+	if err := os.Mkdir(configDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runIntegrationCommand(t, nil, "cp", "-a", "/etc/initramfs-tools/.", configDirectory)
+	for _, path := range []string{filepath.Join(configDirectory, "hooks"), filepath.Join(configDirectory, "scripts", "local-premount"), filepath.Join(configDirectory, "conf.d")} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(configDirectory, "conf.d", "zz-chr-diskprobe-modules"), []byte("MODULES=most\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hook := fmt.Sprintf(`#!/bin/sh
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in prereqs) prereqs; exit 0 ;; esac
+set -eu
+. /usr/share/initramfs-tools/hook-functions
+copy_exec %s /sbin/chr-disk-probe
+`, shellQuoteIntegration(probeBinary))
+	if err := os.WriteFile(filepath.Join(configDirectory, "hooks", "zz-chr-diskprobe"), []byte(hook), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	premount := fmt.Sprintf(`#!/bin/sh
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in prereqs) prereqs; exit 0 ;; esac
+exec /sbin/chr-disk-probe %s >/dev/console 2>&1
+`, shellQuoteIntegration(filepath.Base(targetPath)))
+	if err := os.WriteFile(filepath.Join(configDirectory, "scripts", "local-premount", "zz-chr-diskprobe"), []byte(premount), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runIntegrationCommand(t, nil, "mkinitramfs", "-d", configDirectory, "-o", probeInitrd, version)
+
+	serial, err := os.Create(probeLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	arguments := []string{
+		"-machine", "q35,accel=tcg", "-m", "512", "-nographic", "-no-reboot",
+		"-kernel", kernel, "-initrd", probeInitrd,
+		"-append", "console=ttyS0 root=" + targetPath + " rootfstype=ext4 ro panic=-1",
+	}
+	arguments = append(arguments, diskArguments...)
+	process := exec.CommandContext(ctx, "qemu-system-x86_64", arguments...)
+	process.Stdout, process.Stderr = serial, serial
+	processErr := process.Run()
+	closeErr := serial.Close()
+	logData, readErr := os.ReadFile(probeLog)
+	if processErr != nil || closeErr != nil || readErr != nil {
+		t.Fatalf("read-only disk probe VM failed: process=%v close=%v read=%v\n%s", processErr, closeErr, readErr, tail(string(logData), 16000))
+	}
+	const marker = "CHR-DISK-FINGERPRINT="
+	for _, line := range strings.Split(string(logData), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), marker) {
+			continue
+		}
+		var fingerprint model.DiskFingerprint
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(strings.TrimSpace(line), marker)), &fingerprint); err != nil {
+			t.Fatalf("decode disk probe fingerprint: %v\n%s", err, tail(string(logData), 16000))
+		}
+		return fingerprint
+	}
+	t.Fatalf("disk probe marker was not found\n%s", tail(string(logData), 16000))
+	return model.DiskFingerprint{}
 }
 
 func writerDisk(kind, targetPath string) (model.DiskFingerprint, []string, error) {
